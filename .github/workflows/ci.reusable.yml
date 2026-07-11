@@ -1,0 +1,35 @@
+name: ci-reusable
+
+# Reusable CI for Infinite Solutions projects. Call it from a repo:
+#   jobs:
+#     ci:
+#       uses: infinite-solutions-group/config/.github/workflows/ci.reusable.yml@v1.0.0
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '24'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm -r typecheck
+      - run: pnpm test:cov
+      - run: pnpm knip
+      - run: pnpm -r build --if-present
