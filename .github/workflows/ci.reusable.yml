@@ -32,4 +32,4 @@ jobs:
       - run: pnpm -r typecheck
       - run: pnpm test:cov
       - run: pnpm knip
-      - run: pnpm -r build --if-present
+      - run: pnpm -r --if-present build
