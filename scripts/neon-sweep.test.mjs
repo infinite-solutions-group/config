@@ -25,6 +25,7 @@ import {
 
 const HOUR = 3600 * 1000
 const noSleep = async () => {}
+const host = (u) => new URL(String(u)).hostname
 const NOW = Date.parse('2026-10-30T12:00:00Z')
 const OLD = new Date(NOW - 48 * HOUR).toISOString()
 
@@ -279,7 +280,7 @@ describe('main() with stubbed fetch', () => {
       const method = init.method ?? 'GET'
       requests.push({ method, url: String(url), headers: init.headers ?? {} })
       const u = String(url)
-      if (u.startsWith('https://console.neon.tech/')) {
+      if (host(u) === 'console.neon.tech') {
         if (method === 'GET') {
           return listStatus === 200
             ? jsonRes(200, { branches: neonBranches })
@@ -288,7 +289,7 @@ describe('main() with stubbed fetch', () => {
         if (u.endsWith('/branches/id-pt')) return jsonRes(409, { message: 'branch has children' })
         return jsonRes(200, {})
       }
-      if (u.startsWith('https://api.github.com/')) {
+      if (host(u) === 'api.github.com') {
         if (u === 'https://api.github.com/repos/o/r') {
           return jsonRes(repoStatus, { default_branch: 'main' })
         }
@@ -339,7 +340,7 @@ describe('main() with stubbed fetch', () => {
       assert.equal(code, 1)
       assert.deepEqual(deletes().sort(), ['id-ci', 'id-dep', 'id-gone', 'id-pt'])
 
-      const gh = requests.filter((r) => r.url.startsWith('https://api.github.com/'))
+      const gh = requests.filter((r) => host(r.url) === 'api.github.com')
       const ghUrls = gh.map((r) => r.url)
       const base = 'https://api.github.com/repos/o/r/branches/'
       const i1 = ghUrls.indexOf(`${base}dependabot%252Fnpm_and_yarn%252Ffoo-1.2.3`)
@@ -347,7 +348,7 @@ describe('main() with stubbed fetch', () => {
       assert.ok(i1 >= 0 && i2 > i1, `dependabot lookups in order: ${ghUrls.join(', ')}`)
       for (const r of gh) assert.equal(r.headers.Authorization, 'Bearer t')
 
-      for (const r of requests.filter((r) => r.url.startsWith('https://console.neon.tech/'))) {
+      for (const r of requests.filter((r) => host(r.url) === 'console.neon.tech')) {
         assert.equal(r.headers.Authorization, 'Bearer neon-key')
       }
 
@@ -381,7 +382,7 @@ describe('main() with stubbed fetch', () => {
   test('no GITHUB_TOKEN: no GitHub calls, preview/* never deleted', async () => {
     installFetch()
     await main({ ...baseEnv, DRY_RUN: 'false' }, { sleepImpl: noSleep })
-    assert.equal(requests.filter((r) => r.url.includes('api.github.com')).length, 0)
+    assert.equal(requests.filter((r) => host(r.url) === 'api.github.com').length, 0)
     assert.deepEqual(deletes().sort(), ['id-ci', 'id-pt'])
   })
 
@@ -484,7 +485,7 @@ describe('main() with stubbed fetch', () => {
         const method = init.method ?? 'GET'
         const u = String(url)
         requests.push({ method, url: u, headers: init.headers ?? {} })
-        if (u.startsWith('https://console.neon.tech/')) {
+        if (host(u) === 'console.neon.tech') {
           return method === 'GET' ? jsonRes(200, { branches: allPreviews }) : jsonRes(200, {})
         }
         if (u === 'https://api.github.com/repos/o/r')
