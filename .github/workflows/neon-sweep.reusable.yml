@@ -12,13 +12,21 @@ name: neon-sweep-reusable
 #   jobs:
 #     sweep:
 #       uses: infinite-solutions-group/config/.github/workflows/neon-sweep.reusable.yml@<SHA>
-#       with: { dry_run: false, max_age_hours: 24, extra_protected: '', max_deletes: 25 }
+#       # config_ref duplicates the uses: SHA because github.job_workflow_sha is empty on workflow_dispatch
+#       with: { config_ref: <SHA>, dry_run: false, max_age_hours: 24, extra_protected: '', max_deletes: 25 }
 #       secrets: { NEON_API_KEY: ${{ secrets.NEON_API_KEY }}, NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }} }
 #       permissions: { contents: read }
 
 on:
   workflow_call:
     inputs:
+      config_ref:
+        type: string
+        default: ''
+        description: >-
+          Commit SHA of config this reusable is pinned at — pass the same 40-char
+          SHA as in `uses:`. Used when github.job_workflow_sha is empty
+          (workflow_dispatch).
       dry_run:
         type: boolean
         default: false
@@ -49,24 +57,45 @@ jobs:
       group: neon-sweep-${{ github.repository }}
       cancel-in-progress: false
     steps:
-      # Fail fast if the pinned ref is empty. github.job_workflow_sha normally holds
-      # the exact commit this reusable workflow was called at, but it comes back EMPTY
-      # on "Re-run failed jobs" for a reusable-workflow job. An empty ref makes
-      # actions/checkout silently fall back to config's DEFAULT BRANCH — an unpinned
-      # (unverified) script that deletes databases. Guard here so the operator gets an
-      # actionable message instead.
-      - name: Assert sweep ref is pinned
+      # Resolve the commit to check the sweep script out at, and fail fast if there is
+      # none. github.job_workflow_sha normally holds the exact commit this reusable
+      # workflow was called at, but it comes back EMPTY on workflow_dispatch runs of the
+      # caller and on "Re-run failed jobs". An empty ref makes actions/checkout silently
+      # fall back to config's DEFAULT BRANCH — an unpinned (unverified) script that
+      # deletes databases. So fall back to the explicit config_ref input (the same SHA as
+      # the caller's uses: line), require a full 40-hex SHA, and refuse a mismatch.
+      - name: Resolve pinned config ref
+        id: ref
+        env:
+          JOB_SHA: ${{ github.job_workflow_sha }}
+          INPUT_REF: ${{ inputs.config_ref }}
         run: |
-          if [ -z "${{ github.job_workflow_sha }}" ]; then
-            echo "::error::github.job_workflow_sha is empty, so the sweep script would be checked out from config's default branch instead of the pinned commit. This happens on 'Re-run failed jobs' for a reusable workflow — re-run ALL jobs or push a fresh commit instead." >&2
+          set -euo pipefail
+          if [ -n "$JOB_SHA" ] && [ -n "$INPUT_REF" ] && [ "$JOB_SHA" != "$INPUT_REF" ]; then
+            echo "::error::config_ref ($INPUT_REF) does not match the commit this reusable workflow was called at ($JOB_SHA); the caller is mis-pinned — set config_ref to the same SHA as the uses: line"
             exit 1
           fi
+          if [ -n "$JOB_SHA" ]; then
+            REF="$JOB_SHA"; SOURCE=job_workflow_sha
+          else
+            REF="$INPUT_REF"; SOURCE=config_ref
+          fi
+          if [ -z "$REF" ]; then
+            echo "::error::github.job_workflow_sha is empty and no config_ref input was given, so the sweep script cannot be pinned. This happens on workflow_dispatch and on 'Re-run failed jobs' — pass config_ref: <SHA> (the same SHA as the uses: line) or re-run ALL jobs."
+            exit 1
+          fi
+          if ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::config_ref must be a full 40-hex commit SHA, got '$REF' — a branch or tag name is never accepted here"
+            exit 1
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Pinned config ref: $REF (source: $SOURCE)"
 
       - name: Checkout sweep script (pinned to this reusable workflow's commit)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: infinite-solutions-group/config
-          ref: ${{ github.job_workflow_sha }}
+          ref: ${{ steps.ref.outputs.ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
