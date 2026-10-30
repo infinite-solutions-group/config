@@ -98,7 +98,7 @@ jobs:
   sweep:
     uses: infinite-solutions-group/config/.github/workflows/neon-sweep.reusable.yml@<MERGED_SHA>
     with:
-      # config_ref duplicates the uses: SHA because github.job_workflow_sha is empty on workflow_dispatch
+      # config_ref duplicates the uses: SHA because github.job_workflow_sha is empty on cross-repository calls
       config_ref: <MERGED_SHA>
       # fromJSON: GitHub stringifies expression results before checking them against
       # the reusable workflow's typed inputs, so a bare `|| 25` arrives as '25' and
@@ -114,9 +114,11 @@ jobs:
 ```
 
 `config_ref` must be the same 40-character SHA as the `uses:` line. The
-reusable workflow prefers `github.job_workflow_sha` and falls back to
-`config_ref`, because that context is empty on `workflow_dispatch` runs; it
-rejects anything that is not a full SHA and fails if the two disagree.
+reusable workflow prefers `github.job_workflow_sha`, but that context is empty
+on cross-repository calls (observed on schedule, pull_request and
+workflow_dispatch), so `config_ref` is effectively required and the sweep fails
+closed without it. It falls back to `config_ref`, rejects anything that is not
+a full SHA, and fails if the two disagree.
 
 **Caller requirements:** the Neon project must map 1:1 to the calling repo,
 and Neon preview branches must be named exactly `preview/<raw git branch name>`
