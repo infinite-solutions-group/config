@@ -461,11 +461,11 @@ describe('main() with stubbed fetch', () => {
     }
   })
 
-  test('MAX_PREVIEW_DELETE_FRACTION must be in (0, 1]', async () => {
+  test('MAX_DELETES must be an integer >= 1', async () => {
     installFetch()
-    for (const v of ['0', '1.5', 'abc', '-0.2', '']) {
+    for (const v of ['0', '-1', '1.5', 'abc', '']) {
       const code = await main(
-        { ...baseEnv, MAX_PREVIEW_DELETE_FRACTION: v, GITHUB_TOKEN: 't' },
+        { ...baseEnv, MAX_DELETES: v, GITHUB_TOKEN: 't' },
         { sleepImpl: noSleep }
       )
       assert.equal(code, 1, JSON.stringify(v))
@@ -473,35 +473,26 @@ describe('main() with stubbed fetch', () => {
     assert.equal(requests.length, 0)
   })
 
-  test('MAX_PREVIEW_DELETE_FRACTION=1 disables the cap; default 0.5 trips it', async () => {
-    const allPreviews = Array.from({ length: 4 }, (_, i) => ({
-      id: `p${i}`,
-      name: `preview/gone${i}`,
-      created_at: old,
-    }))
-    const stub = () => {
-      requests = []
-      globalThis.fetch = async (url, init = {}) => {
-        const method = init.method ?? 'GET'
-        const u = String(url)
-        requests.push({ method, url: u, headers: init.headers ?? {} })
-        if (host(u) === 'console.neon.tech') {
-          return method === 'GET' ? jsonRes(200, { branches: allPreviews }) : jsonRes(200, {})
-        }
-        if (u === 'https://api.github.com/repos/o/r')
-          return jsonRes(200, { default_branch: 'main' })
-        if (u.endsWith('/branches/main')) return jsonRes(200, {})
-        return jsonRes(404, {})
-      }
-    }
-    const env = { ...baseEnv, DRY_RUN: 'false', GITHUB_TOKEN: 't' }
-    stub()
-    await assert.rejects(main(env, { sleepImpl: noSleep }), /Refusing to sweep: 4 of 4/)
+  test('MAX_DELETES=1 parses and the ceiling refuses; nothing is deleted', async () => {
+    installFetch()
+    await assert.rejects(
+      main(
+        { ...baseEnv, MAX_DELETES: '1', DRY_RUN: 'false', GITHUB_TOKEN: 't' },
+        { sleepImpl: noSleep }
+      ),
+      /Refusing to sweep: 4 delete candidate\(s\) exceed max_deletes=1/
+    )
     assert.deepEqual(deletes(), [])
-    stub()
-    const code = await main({ ...env, MAX_PREVIEW_DELETE_FRACTION: '1' }, { sleepImpl: noSleep })
-    assert.equal(code, 0)
-    assert.deepEqual(deletes().sort(), ['p0', 'p1', 'p2', 'p3'])
+  })
+
+  test('MAX_DELETES=4 lets exactly four candidates through', async () => {
+    installFetch()
+    const code = await main(
+      { ...baseEnv, MAX_DELETES: '4', DRY_RUN: 'false', GITHUB_TOKEN: 't' },
+      { sleepImpl: noSleep }
+    )
+    assert.equal(code, 1) // ci-pt-9-1 still fails with 409
+    assert.equal(deletes().length, 4)
   })
 
   test('pagination follows pagination.next with limit=1000', async () => {
@@ -580,33 +571,54 @@ describe('githubCanary', () => {
   })
 })
 
-describe('preview delete cap', () => {
-  const previews = (n) => Array.from({ length: n }, (_, i) => br(`preview/f${i}`))
-  const run = (n, liveCount, extra = {}) =>
+describe('max_deletes ceiling', () => {
+  const cis = (n) => Array.from({ length: n }, (_, i) => br(`ci/${i}`))
+  const run = (n, maxDeletes, dryRun, deleted = []) =>
     sweep({
-      branches: previews(n),
-      ctx: makeCtx({
-        gitBranchExists: async (name) => Number(name.slice(1)) < liveCount,
-        ...extra,
-      }),
+      branches: cis(n),
+      ctx: makeCtx({ maxDeletes }),
+      dryRun,
+      deleteBranch: async (b) => void deleted.push(b.name),
+    })
+  test('exactly at the ceiling proceeds', async () => {
+    const deleted = []
+    const res = await run(5, 5, false, deleted)
+    assert.equal(res.deleted.length, 5)
+    assert.equal(deleted.length, 5)
+  })
+  test('one over the ceiling refuses and deletes nothing', async () => {
+    const deleted = []
+    await assert.rejects(
+      run(6, 5, false, deleted),
+      /Refusing to sweep: 6 delete candidate\(s\) exceed max_deletes=5; review the list and re-run once with a larger max_deletes/
+    )
+    assert.deepEqual(deleted, [])
+  })
+  test('dry run also refuses', async () => {
+    await assert.rejects(run(6, 5, true), /exceed max_deletes=5/)
+  })
+  test('skipped branches do not count toward the ceiling', async () => {
+    const branches = [...cis(2), br('main'), br('feature/x')]
+    const res = await sweep({
+      branches,
+      ctx: makeCtx({ maxDeletes: 2 }),
       dryRun: true,
       deleteBranch: async () => {},
     })
-  test('4 of 5 throws, even in dry run', async () => {
+    assert.equal(res.deleted.length, 2)
+  })
+  test('defaults to 25', async () => {
+    const res = await sweep({
+      branches: cis(25),
+      ctx: makeCtx(),
+      dryRun: true,
+      deleteBranch: async () => {},
+    })
+    assert.equal(res.deleted.length, 25)
     await assert.rejects(
-      run(5, 1),
-      /Refusing to sweep: 4 of 5 preview\/\* branches would be deleted \(cap 0\.5\)/
+      sweep({ branches: cis(26), ctx: makeCtx(), dryRun: true, deleteBranch: async () => {} }),
+      /exceed max_deletes=25/
     )
-  })
-  test('2 of 5 does not trigger', async () => {
-    assert.equal((await run(5, 3)).deleted.length, 2)
-  })
-  test('1 of 1 does not trigger', async () => {
-    assert.equal((await run(1, 0)).deleted.length, 1)
-  })
-  test('4 of 10 does not trigger; custom fraction honoured', async () => {
-    assert.equal((await run(10, 6)).deleted.length, 4)
-    await assert.rejects(run(10, 6, { maxPreviewDeleteFraction: 0.3 }), /cap 0\.3/)
   })
 })
 

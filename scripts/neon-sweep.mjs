@@ -36,6 +36,8 @@ export function decodeDependabotName(name) {
   return name.replace(/%2f/gi, '/')
 }
 
+const DEFAULT_MAX_DELETES = 25
+
 const skip = (reason) => ({ action: 'skip', reason })
 
 export async function decide(branch, ctx) {
@@ -95,14 +97,12 @@ export async function sweep({ branches, ctx, dryRun, deleteBranch, decideFn = de
     else result.skipped.push(entry)
   }
 
-  // Fail-closed cap: a wrong repo/token can make every lookup 404, so refuse a
-  // mass delete of preview branches (dry runs included, to surface it).
-  const previewTotal = branches.filter((b) => b.name.startsWith(PREVIEW_PREFIX)).length
-  const orphans = candidates.filter((c) => c.entry.rule === 'preview-orphan').length
-  const cap = ctx.maxPreviewDeleteFraction ?? 0.5
-  if (orphans > 3 && orphans > cap * previewTotal) {
+  // Fail-closed ceiling: a wrong repo/token or a bad rule can turn everything into a
+  // candidate, so refuse a large sweep outright (dry runs included, to surface it).
+  const maxDeletes = ctx.maxDeletes ?? DEFAULT_MAX_DELETES
+  if (candidates.length > maxDeletes) {
     throw new Error(
-      `Refusing to sweep: ${orphans} of ${previewTotal} preview/* branches would be deleted (cap ${cap}); re-run with a smaller set or check GITHUB_REPOSITORY / token`
+      `Refusing to sweep: ${candidates.length} delete candidate(s) exceed max_deletes=${maxDeletes}; review the list and re-run once with a larger max_deletes`
     )
   }
 
@@ -310,15 +310,10 @@ export async function main(env = process.env, { sleepImpl = defaultSleep } = {})
     console.error('Error: MAX_AGE_HOURS must be a finite number >= 1')
     return 1
   }
-  const rawFraction = env.MAX_PREVIEW_DELETE_FRACTION
-  const maxPreviewDeleteFraction = rawFraction === undefined ? 0.5 : Number(rawFraction)
-  if (
-    String(rawFraction ?? '0.5').trim() === '' ||
-    !Number.isFinite(maxPreviewDeleteFraction) ||
-    maxPreviewDeleteFraction <= 0 ||
-    maxPreviewDeleteFraction > 1
-  ) {
-    console.error('Error: MAX_PREVIEW_DELETE_FRACTION must be a number in (0, 1]')
+  const rawMaxDeletes = env.MAX_DELETES ?? '25'
+  const maxDeletes = Number(rawMaxDeletes)
+  if (String(rawMaxDeletes).trim() === '' || !Number.isInteger(maxDeletes) || maxDeletes < 1) {
+    console.error('Error: MAX_DELETES must be an integer >= 1')
     return 1
   }
   const dryRun = ['true', '1'].includes(String(env.DRY_RUN ?? '').toLowerCase())
@@ -347,7 +342,7 @@ export async function main(env = process.env, { sleepImpl = defaultSleep } = {})
     extraProtected: parseExtraProtected(env.EXTRA_PROTECTED ?? ''),
     gitBranchExists,
     lookupNote,
-    maxPreviewDeleteFraction,
+    maxDeletes,
   }
 
   const opts = { sleepImpl }

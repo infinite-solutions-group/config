@@ -98,7 +98,7 @@ jobs:
     uses: infinite-solutions-group/config/.github/workflows/neon-sweep.reusable.yml@<MERGED_SHA>
     with:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-      # max_preview_delete_fraction: 1   # one-off, for the first-run backlog
+      # max_deletes: 50   # one-off, for a large backlog
     secrets:
       NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
@@ -108,20 +108,22 @@ jobs:
 **Caller requirements:** the Neon project must map 1:1 to the calling repo,
 and Neon preview branches must be named exactly `preview/<raw git branch name>`
 (as the Neon and Vercel integration does). Run `workflow_dispatch` with
-`dry_run` first and read the step summary before the Monday cron fires. Two
-fail-closed checks protect against a bad token or `GITHUB_REPOSITORY`: before
+`dry_run` first and read the step summary before the Monday cron fires.
+Fail-closed checks protect against a bad token or `GITHUB_REPOSITORY`: before
 sweeping, a canary reads the repo and its default branch, and if either call
-fails no `preview/*` branch is deleted that run; and the run aborts (dry runs
-included) if more than 3 `preview/*` branches, and more than 50% of all of them,
-would be deleted. `max_age_hours` must be at least 1. Neon calls are retried
-with backoff on 423, 429 and 5xx, and every request has a 30 second timeout.
+fails no `preview/*` branch is deleted that run. `max_age_hours` must be at
+least 1. Neon calls are retried with backoff on 423, 429 and 5xx, and every
+request has a 30 second timeout.
 
-**First run with a backlog:** the 50% cap is the input
-`max_preview_delete_fraction` (number in (0, 1], default 0.5; the script reads
-`MAX_PREVIEW_DELETE_FRACTION`). Start with `workflow_dispatch` and
-`dry_run=true`. If the summary shows the refusal, re-run with
-`max_preview_delete_fraction: 1` once the Would-delete list has been eyeballed,
-then leave it at the default. The "more than 3 branches" floor always applies.
+Mike uses one personal Neon API key as `NEON_API_KEY` in all four callers.
+Rotating it means re-running
+`gh secret set NEON_API_KEY -R infinite-solutions-group/<repo>` for each of
+finos, mikeludden, quayside-web and isg-web.
+
+**Delete ceiling:** `max_deletes` (integer >= 1, default 25; the script reads
+`MAX_DELETES`) applies to all rules. If more branches than that would be
+deleted, the run refuses before deleting anything, and a dry run shows the same
+refusal, so you can read the list and raise `max_deletes` for one run.
 
 Run locally in dry-run mode:
 
