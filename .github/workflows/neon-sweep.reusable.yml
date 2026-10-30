@@ -1,0 +1,88 @@
+name: neon-sweep-reusable
+
+# Reusable weekly Neon branch sweep. Deletes:
+#   - CI orphans: Neon branches named ci/*, ci-pr-*, ci-pt-* older than max_age_hours
+#   - preview orphans: preview/<git-branch> older than max_age_hours whose git branch
+#     no longer exists in the CALLING repo
+# Never touches: primary/default/Neon-protected branches, the hard denylist (main,
+# master, staging, production, prod, develop, dev, test-base, preview/develop,
+# preview/main), anything in extra_protected, anything younger than max_age_hours, or
+# any preview branch whose GitHub lookup errors (only a clean 404 counts as "gone").
+# Callers pin by commit SHA:
+#   jobs:
+#     sweep:
+#       uses: infinite-solutions-group/config/.github/workflows/neon-sweep.reusable.yml@<SHA>
+#       with: { dry_run: false, max_age_hours: 24, extra_protected: '', max_deletes: 25 }
+#       secrets: { NEON_API_KEY: ${{ secrets.NEON_API_KEY }}, NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }} }
+#       permissions: { contents: read }
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: false
+      max_age_hours:
+        type: number
+        default: 24
+      extra_protected:
+        type: string
+        default: ''
+      max_deletes:
+        type: number
+        default: 25
+    secrets:
+      NEON_API_KEY:
+        required: true
+      NEON_PROJECT_ID:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Never run two sweeps against the same repo's Neon project at once.
+    concurrency:
+      group: neon-sweep-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      # Fail fast if the pinned ref is empty. github.job_workflow_sha normally holds
+      # the exact commit this reusable workflow was called at, but it comes back EMPTY
+      # on "Re-run failed jobs" for a reusable-workflow job. An empty ref makes
+      # actions/checkout silently fall back to config's DEFAULT BRANCH — an unpinned
+      # (unverified) script that deletes databases. Guard here so the operator gets an
+      # actionable message instead.
+      - name: Assert sweep ref is pinned
+        run: |
+          if [ -z "${{ github.job_workflow_sha }}" ]; then
+            echo "::error::github.job_workflow_sha is empty, so the sweep script would be checked out from config's default branch instead of the pinned commit. This happens on 'Re-run failed jobs' for a reusable workflow — re-run ALL jobs or push a fresh commit instead." >&2
+            exit 1
+          fi
+
+      - name: Checkout sweep script (pinned to this reusable workflow's commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: infinite-solutions-group/config
+          ref: ${{ github.job_workflow_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Sweep Neon branches
+        # github.repository / github.token inside a reusable workflow are the CALLER's,
+        # which is what we want: preview/* is checked against the caller's git branches.
+        run: node scripts/neon-sweep.mjs
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          MAX_AGE_HOURS: ${{ inputs.max_age_hours }}
+          EXTRA_PROTECTED: ${{ inputs.extra_protected }}
+          MAX_DELETES: ${{ inputs.max_deletes }}
