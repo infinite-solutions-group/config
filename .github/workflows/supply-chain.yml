@@ -7,6 +7,9 @@ on:
     - cron: '17 6 * * 1'
 jobs:
   supply-chain:
-    uses: infinite-solutions-group/shai-hulud-detect/.github/workflows/scan.reusable.yml@ea4b0cd6f58b1822aac44a5657056635693f2923
+    uses: infinite-solutions-group/shai-hulud-detect/.github/workflows/scan.reusable.yml@2bb6f93fd4dcdbe88ae5bc8192b838d3e765b1ac
+    # scanner_ref duplicates the uses: SHA because github.job_workflow_sha is empty on cross-repository calls
+    with:
+      scanner_ref: 2bb6f93fd4dcdbe88ae5bc8192b838d3e765b1ac
     permissions:
       contents: read
